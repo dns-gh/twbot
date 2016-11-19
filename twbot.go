@@ -69,7 +69,7 @@ type TwitterBot struct {
 //  - not remove friendship from a non friend
 //  - not retweet a tweet already retweeted
 //
-// You have to set up 4 environement variables:
+// You have to set up 4 environment variables:
 //  TWITTER_CONSUMER_KEY,
 //  TWITTER_CONSUMER_SECRET,
 //  TWITTER_ACCESS_TOKEN,
@@ -190,6 +190,20 @@ func (t *TwitterBot) TweetSliceOnceAsync(fetch func() ([]string, error)) {
 	}()
 }
 
+// TweetSlicePeriodically tweets periodically the slice returned by the given 'fetch' callback.
+// The slice tweet frequencies is set up by the given 'freq' input parameter.
+// It logs errors for each failed tweet tentative.
+func (t *TwitterBot) TweetSlicePeriodically(fetch func() ([]string, error), freq time.Duration) {
+	ticker := time.NewTicker(freq)
+	defer ticker.Stop()
+	for _ = range ticker.C {
+		err := t.TweetSliceOnce(fetch)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
 // TweetSlicePeriodicallyAsync tweets asynchronously and periodically the
 // slice returned by the given 'fetch' callback.
 // The slice tweet frequencies is set up by the given 'freq' input parameter.
@@ -198,14 +212,7 @@ func (t *TwitterBot) TweetSlicePeriodicallyAsync(fetch func() ([]string, error),
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		ticker := time.NewTicker(freq)
-		defer ticker.Stop()
-		for _ = range ticker.C {
-			err := t.TweetSliceOnce(fetch)
-			if err != nil {
-				log.Println(err)
-			}
-		}
+		t.TweetSlicePeriodically(fetch, freq)
 	}()
 }
 
@@ -238,6 +245,20 @@ func (t *TwitterBot) TweetOnceAsync(fetch func() (string, error)) {
 	}()
 }
 
+// TweetPeriodically tweets periodically the message returned by the 'fetch' callback.
+// The tweet frequencies is set up by the given 'freq' input parameter.
+// It only logs the error if the 'fetch' call failed or if the tweet itself failed.
+func (t *TwitterBot) TweetPeriodically(fetch func() (string, error), freq time.Duration) {
+	ticker := time.NewTicker(freq)
+	defer ticker.Stop()
+	for _ = range ticker.C {
+		err := t.TweetOnce(fetch)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
 // TweetPeriodicallyAsync tweets asynchronously and periodically the message returned
 // by the 'fetch' callback.
 // The tweet frequencies is set up by the given 'freq' input parameter.
@@ -246,14 +267,7 @@ func (t *TwitterBot) TweetPeriodicallyAsync(fetch func() (string, error), freq t
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		ticker := time.NewTicker(freq)
-		defer ticker.Stop()
-		for _ = range ticker.C {
-			err := t.TweetOnce(fetch)
-			if err != nil {
-				log.Println(err)
-			}
-		}
+		t.TweetPeriodically(fetch, freq)
 	}()
 }
 
@@ -286,6 +300,28 @@ func (t *TwitterBot) RetweetOnceAsync(searchQueries []string) {
 	}()
 }
 
+func (t *TwitterBot) retweetPeriodically(queries []string, freq time.Duration) {
+	ticker := time.NewTicker(freq)
+	defer ticker.Stop()
+	for _ = range ticker.C {
+		err := t.RetweetOnce(queries)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+// RetweetPeriodically retweets periodically and randomly, with a maximum of
+// 'retweetPolicy.maxTry' tries, a tweet matching one element of the input queries slice.
+// The retweet frequencies is set up by the given 'freq' input parameter.
+// It logs errors if the loading of tweets in database failed
+// or if the retweets itself failed.
+func (t *TwitterBot) RetweetPeriodically(searchQueries []string, freq time.Duration) {
+	queries := make([]string, len(searchQueries))
+	copy(queries, searchQueries)
+	t.retweetPeriodically(queries, freq)
+}
+
 // RetweetPeriodicallyAsync retweets asynchronously, periodically and randomly, with a maximum of
 // 'retweetPolicy.maxTry' tries, a tweet matching one element of the input queries slice.
 // The retweet frequencies is set up by the given 'freq' input parameter.
@@ -297,14 +333,7 @@ func (t *TwitterBot) RetweetPeriodicallyAsync(searchQueries []string, freq time.
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		ticker := time.NewTicker(freq)
-		defer ticker.Stop()
-		for _ = range ticker.C {
-			err := t.RetweetOnce(queries)
-			if err != nil {
-				log.Println(err)
-			}
-		}
+		t.retweetPeriodically(queries, freq)
 	}()
 }
 
@@ -320,7 +349,17 @@ func (t *TwitterBot) AutoUnfollowFriendsAsync() {
 	}()
 }
 
-// AutoFollowFollowersAsync automatically asynchronously follow the
+// AutoFollowFollowers automatically follows the
+// followers of the first user fecthed using the given 'query'.
+// The 'maxPage' parameter indicates the number of page of followers
+// (5000 users max by page) we want to fetch.
+func (t *TwitterBot) AutoFollowFollowers(query string, maxPage int) {
+	log.Printf("[twitter] launching auto follow with '%s' over %d page(s)...\n", query, maxPage)
+	t.followAll(t.fetchUserIds(query, maxPage))
+	log.Println("[twitter] auto follow disabled")
+}
+
+// AutoFollowFollowersAsync automatically asynchronously follows the
 // followers of the first user fecthed using the given 'query'.
 // The 'maxPage' parameter indicates the number of page of followers
 // (5000 users max by page) we want to fetch.
@@ -328,9 +367,7 @@ func (t *TwitterBot) AutoFollowFollowersAsync(query string, maxPage int) {
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		log.Printf("[twitter] launching auto follow with '%s' over %d page(s)...\n", query, maxPage)
-		t.followAll(t.fetchUserIds(query, maxPage))
-		log.Println("[twitter] auto follow disabled")
+		t.AutoFollowFollowers(query, maxPage)
 	}()
 }
 
