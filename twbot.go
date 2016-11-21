@@ -1,5 +1,10 @@
 package twbot
 
+// TODO:
+// - forbidden list of words in queries
+// - add an exported SleepPolicy for tweet/retweet
+// - add an errorPolicy ? exported ?
+
 import (
 	"fmt"
 	"log"
