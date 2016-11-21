@@ -1,7 +1,6 @@
 package twbot
 
 // TODO:
-// - forbidden list of words in queries
 // - add an errorPolicy ? exported ?
 // - get list of suggestions of friendship
 // - get list of trending tweets
@@ -308,8 +307,8 @@ func (t *TwitterBot) TweetPeriodicallyAsync(fetch func() (string, error), freq t
 // a tweet matching one element of the input queries slice.
 // It returns an error if the loading of tweets in database failed
 // or if the retweet itself failed.
-func (t *TwitterBot) RetweetOnce(queries []string) error {
-	err := t.autoRetweet(queries)
+func (t *TwitterBot) RetweetOnce(queries, bannedQueries []string) error {
+	err := t.autoRetweet(queries, bannedQueries)
 	if err != nil {
 		return err
 	}
@@ -320,24 +319,26 @@ func (t *TwitterBot) RetweetOnce(queries []string) error {
 // 'retweetPolicy.maxTry' tries, a tweet matching one element of the input queries slice.
 // It logs errors if the loading of tweets in database failed
 // or if the retweets itself failed.
-func (t *TwitterBot) RetweetOnceAsync(searchQueries []string) {
+func (t *TwitterBot) RetweetOnceAsync(searchQueries, bannedQueries []string) {
 	queries := make([]string, len(searchQueries))
 	copy(queries, searchQueries)
+	banned := make([]string, len(bannedQueries))
+	copy(banned, bannedQueries)
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		err := t.RetweetOnce(queries)
+		err := t.RetweetOnce(queries, banned)
 		if err != nil {
 			log.Println(err)
 		}
 	}()
 }
 
-func (t *TwitterBot) retweetPeriodically(queries []string, freq time.Duration) {
+func (t *TwitterBot) retweetPeriodically(queries, bannedQueries []string, freq time.Duration) {
 	ticker := time.NewTicker(freq)
 	defer ticker.Stop()
 	for _ = range ticker.C {
-		err := t.RetweetOnce(queries)
+		err := t.RetweetOnce(queries, bannedQueries)
 		if err != nil {
 			log.Println(err)
 		}
@@ -349,10 +350,12 @@ func (t *TwitterBot) retweetPeriodically(queries []string, freq time.Duration) {
 // The retweet frequencies is set up by the given 'freq' input parameter.
 // It logs errors if the loading of tweets in database failed
 // or if the retweets itself failed.
-func (t *TwitterBot) RetweetPeriodically(searchQueries []string, freq time.Duration) {
+func (t *TwitterBot) RetweetPeriodically(searchQueries, bannedQueries []string, freq time.Duration) {
 	queries := make([]string, len(searchQueries))
 	copy(queries, searchQueries)
-	t.retweetPeriodically(queries, freq)
+	banned := make([]string, len(bannedQueries))
+	copy(banned, bannedQueries)
+	t.retweetPeriodically(queries, banned, freq)
 }
 
 // RetweetPeriodicallyAsync retweets asynchronously, periodically and randomly, with a maximum of
@@ -360,13 +363,15 @@ func (t *TwitterBot) RetweetPeriodically(searchQueries []string, freq time.Durat
 // The retweet frequencies is set up by the given 'freq' input parameter.
 // It logs errors if the loading of tweets in database failed
 // or if the retweets itself failed.
-func (t *TwitterBot) RetweetPeriodicallyAsync(searchQueries []string, freq time.Duration) {
+func (t *TwitterBot) RetweetPeriodicallyAsync(searchQueries, bannedQueries []string, freq time.Duration) {
 	queries := make([]string, len(searchQueries))
 	copy(queries, searchQueries)
+	banned := make([]string, len(bannedQueries))
+	copy(banned, bannedQueries)
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
-		t.retweetPeriodically(queries, freq)
+		t.retweetPeriodically(queries, banned, freq)
 	}()
 }
 
@@ -498,6 +503,24 @@ func (t *TwitterBot) removeDuplicates(current []anaconda.Tweet) []anaconda.Tweet
 	return stripped
 }
 
+func (t *TwitterBot) removeBanned(current []anaconda.Tweet, bannedQueries []string) []anaconda.Tweet {
+	allowed := []anaconda.Tweet{}
+	for _, tweet := range current {
+		banned := false
+		for _, bannedQuery := range bannedQueries {
+			if strings.Contains(tweet.Text, bannedQuery) || strings.Contains(tweet.User.Name, bannedQuery) {
+				banned = true
+			}
+		}
+		if !banned {
+			allowed = append(allowed, tweet)
+		} else {
+			t.print(fmt.Sprintf("[twitter] removing banned tweet (id:%d), text:%s\n", tweet.Id, tweet.Text))
+		}
+	}
+	return allowed
+}
+
 func (t *TwitterBot) like(tweet *anaconda.Tweet) {
 	if !t.likePolicy.auto {
 		return
@@ -607,7 +630,7 @@ func (t *TwitterBot) retweet(current []anaconda.Tweet) (rt anaconda.Tweet, err e
 	return rt, err
 }
 
-func (t *TwitterBot) getTweets(queries []string, previous []anaconda.Tweet) ([]anaconda.Tweet, error) {
+func (t *TwitterBot) getTweets(queries, bannedQueries []string, previous []anaconda.Tweet) ([]anaconda.Tweet, error) {
 	query := freeze.GetRandomElement(queries)
 	log.Println("[twitter] searching tweets to retweet with query:", query)
 	v := url.Values{}
@@ -617,13 +640,14 @@ func (t *TwitterBot) getTweets(queries []string, previous []anaconda.Tweet) ([]a
 		return nil, err
 	}
 	current := results.Statuses
+	current = t.removeBanned(current, bannedQueries)
 	current = t.removeDuplicates(current)
 	current = t.takeDifference(previous, current)
 	log.Println("[twitter] found", len(current), "tweet(s) to retweet matching pattern")
 	return current, nil
 }
 
-func (t *TwitterBot) autoRetweet(queries []string) error {
+func (t *TwitterBot) autoRetweet(queries, bannedQueries []string) error {
 	count := 0
 	previous, err := t.loadTweets()
 	if err != nil {
@@ -631,7 +655,7 @@ func (t *TwitterBot) autoRetweet(queries []string) error {
 	}
 	for {
 		t.sleep()
-		tweets, err := t.getTweets(queries, previous)
+		tweets, err := t.getTweets(queries, bannedQueries, previous)
 		if err != nil {
 			return err
 		}
