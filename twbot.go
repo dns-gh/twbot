@@ -72,6 +72,11 @@ type SleepPolicy struct {
 	MaybeSleepMax         int
 }
 
+func (s *SleepPolicy) log() {
+	log.Printf("[twitter] sleeping policy: %d, %d, %d, %d, %d\n", s.MaxRand, s.MaybeSleepChance,
+		s.MaybeSleepTotalChance, s.MaybeSleepMin, s.MaybeSleepMax)
+}
+
 // TwitterBot represents the twitter bot.
 type TwitterBot struct {
 	twitterClient      *anaconda.TwitterApi
@@ -392,6 +397,7 @@ func (t *TwitterBot) AutoUnfollowFriendsAsync(sleepPolicy *SleepPolicy) {
 	go func() {
 		defer t.quit.Done()
 		log.Println("[twitter] launching auto unfollow...")
+		sleepPolicyCopy.log()
 		t.unfollowAll(&sleepPolicyCopy)
 		log.Println("[twitter] auto unfollow disabled")
 	}()
@@ -404,6 +410,7 @@ func (t *TwitterBot) AutoUnfollowFriendsAsync(sleepPolicy *SleepPolicy) {
 // the type of sleep you want between requests.
 func (t *TwitterBot) AutoFollowFollowers(query string, maxPage int, sleepPolicy SleepPolicy) {
 	log.Printf("[twitter] launching auto follow with '%s' over %d page(s)...\n", query, maxPage)
+	sleepPolicy.log()
 	t.followAll(t.fetchUserIds(query, maxPage), &sleepPolicy)
 	log.Println("[twitter] auto follow disabled")
 }
