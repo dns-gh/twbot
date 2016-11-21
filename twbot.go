@@ -2,8 +2,10 @@ package twbot
 
 // TODO:
 // - forbidden list of words in queries
-// - add an exported SleepPolicy for tweet/retweet
 // - add an errorPolicy ? exported ?
+// - get list of suggestions of friendship
+// - get list of trending tweets
+// - send messages to friends
 
 import (
 	"fmt"
@@ -53,19 +55,38 @@ type retweetPolicy struct {
 	like   bool
 }
 
+// SleepPolicy represents the sleeping behavior of the bot between requests
+// to the twitter API. Their use is highly recommanded especially when you
+// automatically follow and unfollow users. It will allow you to hide your
+// bot face from twitter statistics analysis.
+type SleepPolicy struct {
+	// maxRand randomly sleeps after each request from '0' to 'maxRand' seconds
+	MaxRand int
+	// maybeSleep parameters enable the user to create a conditional sleep  after each requests
+	// of 'maybeSleepChance' over 'maybeSleepTotalChance' chances. The sleep will last at least
+	// 'maybeSleepMin' seconds and a maximum of 'maybeSleepMax' seconds.
+	// For example, parameters 1, 10, 30, 60 design a random sleep between 30 to 60 seconds
+	// that will occur with a chance of 1 over 10 after each requests.
+	MaybeSleepChance      int
+	MaybeSleepTotalChance int
+	MaybeSleepMin         int
+	MaybeSleepMax         int
+}
+
 // TwitterBot represents the twitter bot.
 type TwitterBot struct {
-	twitterClient *anaconda.TwitterApi
-	followersPath string
-	followers     *twitterUsers
-	friendsPath   string
-	friends       *twitterUsers
-	tweetsPath    string
-	debug         bool
-	likePolicy    *likePolicy
-	retweetPolicy *retweetPolicy
-	mutex         sync.Mutex
-	quit          sync.WaitGroup
+	twitterClient      *anaconda.TwitterApi
+	followersPath      string
+	followers          *twitterUsers
+	friendsPath        string
+	friends            *twitterUsers
+	tweetsPath         string
+	debug              bool
+	likePolicy         *likePolicy
+	retweetPolicy      *retweetPolicy
+	defaultSleepPolicy *SleepPolicy
+	mutex              sync.Mutex
+	quit               sync.WaitGroup
 }
 
 // MakeTwitterBot creates a twitter bot. The database is made of 3 files: followers, friends and tweets.
@@ -113,6 +134,13 @@ func MakeTwitterBot(followersPath, friendsPath, tweetsPath string, debug bool) *
 		retweetPolicy: &retweetPolicy{
 			maxTry: 5,
 			like:   true,
+		},
+		defaultSleepPolicy: &SleepPolicy{
+			MaxRand:               maxRandTimeSleepBetweenRequests,
+			MaybeSleepChance:      1,
+			MaybeSleepTotalChance: 10,
+			MaybeSleepMin:         2500,
+			MaybeSleepMax:         5000,
 		},
 	}
 	err := bot.updateFollowers()
@@ -342,14 +370,24 @@ func (t *TwitterBot) RetweetPeriodicallyAsync(searchQueries []string, freq time.
 	}()
 }
 
+func (t *TwitterBot) checkSleepPolicy(sleepPolicy *SleepPolicy) SleepPolicy {
+	sleepPolicyCopy := *t.defaultSleepPolicy
+	if sleepPolicy != nil {
+		sleepPolicyCopy = *sleepPolicy
+	}
+	return sleepPolicyCopy
+}
+
 // AutoUnfollowFriendsAsync automatically asynchronously unfollows friends
-// from database that were added at least a day ago by default.
-func (t *TwitterBot) AutoUnfollowFriendsAsync() {
+// from database that were added at least a day ago by default. The sleep policy controls
+// the type of sleep you want between requests.
+func (t *TwitterBot) AutoUnfollowFriendsAsync(sleepPolicy *SleepPolicy) {
 	t.quit.Add(1)
+	sleepPolicyCopy := t.checkSleepPolicy(sleepPolicy)
 	go func() {
 		defer t.quit.Done()
 		log.Println("[twitter] launching auto unfollow...")
-		t.unfollowAll()
+		t.unfollowAll(&sleepPolicyCopy)
 		log.Println("[twitter] auto unfollow disabled")
 	}()
 }
@@ -357,22 +395,25 @@ func (t *TwitterBot) AutoUnfollowFriendsAsync() {
 // AutoFollowFollowers automatically follows the
 // followers of the first user fecthed using the given 'query'.
 // The 'maxPage' parameter indicates the number of page of followers
-// (5000 users max by page) we want to fetch.
-func (t *TwitterBot) AutoFollowFollowers(query string, maxPage int) {
+// (5000 users max by page) we want to fetch. The sleep policy controls
+// the type of sleep you want between requests.
+func (t *TwitterBot) AutoFollowFollowers(query string, maxPage int, sleepPolicy SleepPolicy) {
 	log.Printf("[twitter] launching auto follow with '%s' over %d page(s)...\n", query, maxPage)
-	t.followAll(t.fetchUserIds(query, maxPage))
+	t.followAll(t.fetchUserIds(query, maxPage), &sleepPolicy)
 	log.Println("[twitter] auto follow disabled")
 }
 
 // AutoFollowFollowersAsync automatically asynchronously follows the
 // followers of the first user fecthed using the given 'query'.
 // The 'maxPage' parameter indicates the number of page of followers
-// (5000 users max by page) we want to fetch.
-func (t *TwitterBot) AutoFollowFollowersAsync(query string, maxPage int) {
+// (5000 users max by page) we want to fetch. The sleep policy controls
+// the type of sleep you want between requests.
+func (t *TwitterBot) AutoFollowFollowersAsync(query string, maxPage int, sleepPolicy *SleepPolicy) {
 	t.quit.Add(1)
+	sleepPolicyCopy := t.checkSleepPolicy(sleepPolicy)
 	go func() {
 		defer t.quit.Done()
-		t.AutoFollowFollowers(query, maxPage)
+		t.AutoFollowFollowers(query, maxPage, sleepPolicyCopy)
 	}()
 }
 
@@ -489,6 +530,14 @@ func (t *TwitterBot) sleep() {
 func (t *TwitterBot) maybeSleep(chance, totalChance, min, max int) {
 	if !t.debug {
 		freeze.MaybeSleepMinMax(chance, totalChance, min, max)
+	}
+}
+
+func (t *TwitterBot) controlledSleep(sleepPolicy *SleepPolicy) {
+	if !t.debug && sleepPolicy != nil {
+		freeze.Sleep(sleepPolicy.MaxRand)
+		t.maybeSleep(sleepPolicy.MaybeSleepChance, sleepPolicy.MaybeSleepTotalChance,
+			sleepPolicy.MaybeSleepMin, sleepPolicy.MaybeSleepMax)
 	}
 }
 
@@ -702,7 +751,7 @@ func (t *TwitterBot) getFriendToUnFollow() (int64, bool) {
 	return 0, false
 }
 
-func (t *TwitterBot) unfollowAll() {
+func (t *TwitterBot) unfollowAll(sleepPolicy *SleepPolicy) {
 	var id int64
 	for ok := true; ok; id, ok = t.getFriendToUnFollow() {
 		if !ok {
@@ -715,13 +764,11 @@ func (t *TwitterBot) unfollowAll() {
 		}
 		t.unfollowFriend(id)
 		log.Printf("[twitter] unfollowing (id:%d, name:%s)\n", user.Id, user.Name)
-		time.Sleep(timeSleepBetweenFollowUnFollow)
-		t.sleep()
-		t.maybeSleep(1, 10, 2500, 5000)
+		t.controlledSleep(sleepPolicy)
 	}
 	log.Println("[twitter] no more friends to unfollow, waiting 3 hours...")
 	time.Sleep(3 * time.Hour)
-	t.unfollowAll()
+	t.unfollowAll(sleepPolicy)
 }
 
 func (t *TwitterBot) isFollower(id int64) bool {
@@ -757,7 +804,7 @@ func (t *TwitterBot) addFriend(id int64) {
 	}
 }
 
-func (t *TwitterBot) followAll(ids []int64) {
+func (t *TwitterBot) followAll(ids []int64, sleepPolicy *SleepPolicy) {
 	for _, id := range ids {
 		if _, ok := t.getFriend(id); ok || t.isFollower(id) {
 			continue
@@ -770,9 +817,7 @@ func (t *TwitterBot) followAll(ids []int64) {
 		}
 		t.addFriend(id)
 		log.Printf("[twitter] following (id:%d, name:%s)\n", user.Id, user.Name)
-		time.Sleep(timeSleepBetweenFollowUnFollow)
-		t.sleep()
-		t.maybeSleep(1, 5, 5000, 10000)
+		t.controlledSleep(sleepPolicy)
 	}
 }
 
