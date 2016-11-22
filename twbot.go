@@ -5,8 +5,11 @@ package twbot
 // - get list of suggestions of friendship
 // - get list of trending tweets
 // - send messages to friends
+// - extract the retweet policy and pass it as argument
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -305,6 +308,68 @@ func (t *TwitterBot) TweetPeriodicallyAsync(fetch func() (string, error), freq t
 	go func() {
 		defer t.quit.Done()
 		t.TweetPeriodically(fetch, freq)
+	}()
+}
+
+func truncate(msg string) string {
+	bytes := bytes.NewBufferString(msg).Bytes()
+	if len(bytes) > 140 {
+		bytes = bytes[0:136]
+		return string(bytes) + "..."
+	}
+	return msg
+}
+
+// TweetImageOnce tweets the given 'msg' and img' data provided as strings.
+// Note: internally, the 'img' data will be encoded to base 64 in order to be
+// properly tweeted via the twitter API.
+func (t *TwitterBot) TweetImageOnce(msg string, img string) error {
+	buf := bytes.NewBufferString(img)
+	data := base64.StdEncoding.EncodeToString(buf.Bytes())
+	media, err := t.twitterClient.UploadMedia(data)
+	if err != nil {
+		return err
+	}
+
+	tw := url.Values{}
+	tw.Set("media_ids", fmt.Sprintf("%v", media.MediaID))
+	tweet, err := t.twitterClient.PostTweet(truncate(msg), tw)
+	if err != nil {
+		return err
+	}
+	t.print(fmt.Sprintf("tweeting message and image (id: %d): %s\n", tweet.Id, tweet.Text))
+	return nil
+}
+
+// TweetImagePeriodically tweets periodically the message and image returned
+// by the 'fetch' callback.
+// The tweet frequencies is set up by the given 'freq' input parameter.
+// It only logs the error if the 'fetch' call failed or if the tweet itself failed.
+func (t *TwitterBot) TweetImagePeriodically(fetch func() (string, string, error), freq time.Duration) {
+	ticker := time.NewTicker(freq)
+	defer ticker.Stop()
+	for _ = range ticker.C {
+		msg, img, err := fetch()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		err = t.TweetImageOnce(msg, img)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+// TweetImagePeriodicallyAsync tweets asynchronously and periodically the message and image returned
+// by the 'fetch' callback.
+// The tweet frequencies is set up by the given 'freq' input parameter.
+// It only logs the error if the 'fetch' call failed or if the tweet itself failed.
+func (t *TwitterBot) TweetImagePeriodicallyAsync(fetch func() (string, string, error), freq time.Duration) {
+	t.quit.Add(1)
+	go func() {
+		defer t.quit.Done()
+		t.TweetImagePeriodically(fetch, freq)
 	}()
 }
 
