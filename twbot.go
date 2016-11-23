@@ -12,14 +12,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"net/url"
-
-	"strconv"
 
 	"github.com/ChimeraCoder/anaconda"
 	"github.com/dns-gh/freeze"
@@ -32,6 +30,8 @@ const (
 	retweetTextTag                        = "RT @"
 	retweetTextIndex                      = ": "
 	tweetHTTPTag                          = "http://"
+	tweetTextMaxSize                      = 140
+	tweetTruncatedTextMin                 = 30
 	oneDayInNano                    int64 = 86400000000000
 	timeSleepBetweenFollowUnFollow        = 300 * time.Second // seconds
 	maxRandTimeSleepBetweenRequests       = 120               // seconds
@@ -311,19 +311,46 @@ func (t *TwitterBot) TweetPeriodicallyAsync(fetch func() (string, error), freq t
 	}()
 }
 
-func truncate(msg string) string {
+// we want to truncate under 'tweetTextMaxSize' characters in this preference order:
+// - msg + " " + url
+// - msg truncated with at least 'tweetTruncatedTextMin' characters + "... " + url
+// - url
+// - msg
+// - truncated msg
+func truncate(msg, archiveURL string) string {
 	bytes := bytes.NewBufferString(msg).Bytes()
-	if len(bytes) > 140 {
-		bytes = bytes[0:136]
-		return string(bytes) + "..."
+	sep := "... "
+	emptySep := " "
+	if len(archiveURL) == 0 {
+		if len(bytes) > tweetTextMaxSize {
+			bytes = bytes[0 : tweetTextMaxSize-len(sep)]
+			return string(bytes) + sep[0:len(sep)-1]
+		}
+		return string(bytes)
 	}
-	return msg
+	if len(bytes)+len(emptySep)+len(archiveURL) <= tweetTextMaxSize {
+		return string(bytes) + emptySep + archiveURL
+	}
+	left := len(bytes) + len(sep) + len(archiveURL) - tweetTextMaxSize
+	// keep at least 'tweetTruncatedTextMin' characters for the message
+	if len(bytes)-left >= tweetTruncatedTextMin {
+		bytes = bytes[0 : len(bytes)-left]
+		return string(bytes) + sep + archiveURL
+	}
+	if len(archiveURL) <= tweetTextMaxSize {
+		return archiveURL
+	}
+	if len(bytes) <= tweetTextMaxSize {
+		return string(bytes)
+	}
+	bytes = bytes[0 : tweetTextMaxSize-1]
+	return string(bytes)
 }
 
-// TweetImageOnce tweets the given 'msg' and img' data provided as strings.
+// TweetImageOnce tweets the given 'msg', 'archiveURL' and img' data provided as strings.
 // Note: internally, the 'img' data will be encoded to base 64 in order to be
 // properly tweeted via the twitter API.
-func (t *TwitterBot) TweetImageOnce(msg string, img string) error {
+func (t *TwitterBot) TweetImageOnce(msg, archiveURL, img string) error {
 	buf := bytes.NewBufferString(img)
 	data := base64.StdEncoding.EncodeToString(buf.Bytes())
 	media, err := t.twitterClient.UploadMedia(data)
@@ -333,7 +360,8 @@ func (t *TwitterBot) TweetImageOnce(msg string, img string) error {
 
 	tw := url.Values{}
 	tw.Set("media_ids", fmt.Sprintf("%v", media.MediaID))
-	tweet, err := t.twitterClient.PostTweet(truncate(msg), tw)
+	tosend := truncate(msg, archiveURL)
+	tweet, err := t.twitterClient.PostTweet(tosend, tw)
 	if err != nil {
 		return err
 	}
@@ -345,16 +373,16 @@ func (t *TwitterBot) TweetImageOnce(msg string, img string) error {
 // by the 'fetch' callback.
 // The tweet frequencies is set up by the given 'freq' input parameter.
 // It only logs the error if the 'fetch' call failed or if the tweet itself failed.
-func (t *TwitterBot) TweetImagePeriodically(fetch func() (string, string, error), freq time.Duration) {
+func (t *TwitterBot) TweetImagePeriodically(fetch func() (string, string, string, error), freq time.Duration) {
 	ticker := time.NewTicker(freq)
 	defer ticker.Stop()
 	for _ = range ticker.C {
-		msg, img, err := fetch()
+		msg, img, archive, err := fetch()
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		err = t.TweetImageOnce(msg, img)
+		err = t.TweetImageOnce(msg, archive, img)
 		if err != nil {
 			log.Println(err)
 		}
@@ -365,7 +393,7 @@ func (t *TwitterBot) TweetImagePeriodically(fetch func() (string, string, error)
 // by the 'fetch' callback.
 // The tweet frequencies is set up by the given 'freq' input parameter.
 // It only logs the error if the 'fetch' call failed or if the tweet itself failed.
-func (t *TwitterBot) TweetImagePeriodicallyAsync(fetch func() (string, string, error), freq time.Duration) {
+func (t *TwitterBot) TweetImagePeriodicallyAsync(fetch func() (string, string, string, error), freq time.Duration) {
 	t.quit.Add(1)
 	go func() {
 		defer t.quit.Done()
