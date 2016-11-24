@@ -12,7 +12,7 @@ type MySuite struct{}
 
 var _ = Suite(&MySuite{})
 
-// go test ...twbot -gocheck.vv -test.v -gocheck.f TestTruncate
+// go test ...twbot -gocheck.vv -test.v -gocheck.f TestNAME
 const (
 	string141 = "Wrote water woman of heart it total other. By in entirely securing suitable graceful at families improved. Zealously few furniture repulsive."
 	string140 = "Wrote water woman of heart it total other. By in entirely securing suitable graceful at families improved. Zealously few furniture repulsive"
@@ -38,4 +38,42 @@ func (s *MySuite) TestTruncate(c *C) {
 		"By in entirely securing suitable graceful at families improved. Zealously few furniture repul...")
 	trunc = truncate(string140, "")
 	c.Assert(trunc, Equals, string140)
+}
+
+const (
+	rawtweet = "Every year it's a new cool space! Looking forward to the cozy homey atmosphere of this one!   "
+	tweet1   = "Every year it's a new cool space! Looking forward to the cozy homey atmosphere of this one!   https://t.co/CebckjFwmZ"
+	tweet2   = "Every year it's a new cool space! Looking forward to the cozy homey atmosphere of this one!   http://t.co/CebckjFwmZ"
+	retweet1 = "RT @twitandrewking: Every year it's a new cool space! Looking forward to the cozy homey atmosphere of this one!   https://t.co/CebckjFwmZ"
+	retweet2 = "RT @RonBaalke: Every year it's a new cool space! https://t.co/CebckjFwmZ Looking forward to the cozy homey atmosphere of this one!   https://t.co/x5UsU…"
+	retweet3 = "RT @RonBaalke: Every year it's a new cool space! https://t.co/CebckjFwmZ https://t.co/CebckjFwmZ Looking forward to the cozy homey atmosphere of this one!   https://t.co/x5UsU…"
+	retweet4 = "RT @twitandrewking: "
+	retweet5 = "RT @twitandrewking:"
+)
+
+func (s *MySuite) TestOriginalText(c *C) {
+	original, err := getOriginalText(rawtweet)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(tweet1)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(tweet2)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(retweet1)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(retweet2)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(retweet3)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, rawtweet)
+	original, err = getOriginalText(retweet4)
+	c.Assert(err, IsNil)
+	c.Assert(original, Equals, "")
+	original, err = getOriginalText(retweet5)
+	c.Assert(err, NotNil)
+	c.Assert(original, Equals, "")
 }

@@ -29,7 +29,9 @@ const (
 	defaultMaxRetweetBySearch             = 5 // keep 3 tweets, the 2 first tweets being useless ?
 	retweetTextTag                        = "RT @"
 	retweetTextIndex                      = ": "
-	tweetHTTPTag                          = "http://"
+	tweetTCOHTTPTag                       = "http://t.co" // not sure if we can encouter unsecure links with t.co twitter wrapping tool, don't think so...
+	tweetTCOHTTPSTag                      = "https://t.co"
+	tweetTCOTextIndex                     = " " // either the t.co links is at the end of the tweet or the next separator from what follows is an empty space
 	tweetTextMaxSize                      = 140
 	tweetTruncatedTextMin                 = 30
 	oneDayInNano                    int64 = 86400000000000
@@ -225,7 +227,7 @@ func (t *TwitterBot) TweetSliceOnceAsync(fetch func() ([]string, error)) {
 				log.Println(err.Error())
 				continue
 			}
-			t.print(fmt.Sprintf("tweeting message (id: %d): %s\n", tweet.Id, tweet.Text))
+			print(t, fmt.Sprintf("tweeting message (id: %d): %s\n", tweet.Id, tweet.Text))
 		}
 	}()
 }
@@ -268,7 +270,7 @@ func (t *TwitterBot) TweetOnce(fetch func() (string, error)) error {
 	if err != nil {
 		return err
 	}
-	t.print(fmt.Sprintf("tweeting message (id: %d): %s\n", tweet.Id, tweet.Text))
+	print(t, fmt.Sprintf("tweeting message (id: %d): %s\n", tweet.Id, tweet.Text))
 	return nil
 }
 
@@ -365,7 +367,7 @@ func (t *TwitterBot) TweetImageOnce(msg, archiveURL, img string) error {
 	if err != nil {
 		return err
 	}
-	t.print(fmt.Sprintf("tweeting message and image (id: %d): %s\n", tweet.Id, tweet.Text))
+	print(t, fmt.Sprintf("tweeting message and image (id: %d): %s\n", tweet.Id, tweet.Text))
 	return nil
 }
 
@@ -542,25 +544,43 @@ func (t *TwitterBot) loadTweets() ([]anaconda.Tweet, error) {
 	return *tweets, nil
 }
 
-func (t *TwitterBot) getOriginalText(tweet *anaconda.Tweet) string {
-	text := tweet.Text
-	if strings.Contains(tweet.Text, retweetTextTag) {
+func stripText(text, tostripped, endSep string) (string, bool) {
+	stripped := false
+	if strings.Contains(text, tostripped) {
+		subtab := strings.SplitN(text, tostripped, 2)
+		temp := subtab[0]
+		if len(subtab) == 2 {
+			subtab2 := strings.SplitN(subtab[1], endSep, 2)
+			if len(subtab2) == 2 {
+				temp = temp + subtab2[1]
+			}
+		}
+		text = temp
+		stripped = true
+	}
+	return text, stripped
+}
+
+func getOriginalText(text string) (string, error) {
+	// strip text from retweet prefixes, i.e "RT @name "
+	if strings.Contains(text, retweetTextTag) {
 		tab := strings.SplitN(text, retweetTextIndex, 2)
 		if len(tab) != 2 {
-			log.Println("[twitter] error parsing a tweet text:", text)
-			return text
+			return "", fmt.Errorf("[twitter] error parsing a tweet text: %s", text)
 		}
 		text = tab[1]
-		if strings.Contains(text, tweetHTTPTag) {
-			subtab := strings.SplitN(text, tweetHTTPTag, 2)
-			if len(subtab) > 2 {
-				log.Println("[twitter] error parsing a sub tweet text:", text)
-				return text
-			}
-			text = subtab[0]
+	}
+	// strip text from HTTPS and HTTP t.co links
+	stripped := text
+	stripped1, stripped2 := false, false
+	for {
+		stripped, stripped1 = stripText(stripped, tweetTCOHTTPTag, tweetTCOTextIndex)
+		stripped, stripped2 = stripText(stripped, tweetTCOHTTPSTag, tweetTCOTextIndex)
+		if !stripped1 && !stripped2 {
+			break
 		}
 	}
-	return text
+	return stripped, nil
 }
 
 func (t *TwitterBot) takeDifference(previous, current []anaconda.Tweet) []anaconda.Tweet {
@@ -569,20 +589,27 @@ func (t *TwitterBot) takeDifference(previous, current []anaconda.Tweet) []anacon
 	addedByText := map[string]struct{}{}
 	for _, v := range previous {
 		addedByID[v.Id] = struct{}{}
-		addedByText[t.getOriginalText(&v)] = struct{}{}
+		original, err := getOriginalText(v.Text)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		addedByText[original] = struct{}{}
 	}
 	for _, v := range current {
 		if _, ok := addedByID[v.Id]; ok {
-			t.print(fmt.Sprintf("[twitter] found a duplicate (same id) from database id:%d, text:%s\n", v.Id, v.Text))
+			print(t, fmt.Sprintf("[twitter] found a duplicate (same id) from database id:%d, text:%s\n", v.Id, v.Text))
 			continue
 		}
-		text := t.getOriginalText(&v)
-		if _, ok := addedByText[text]; ok {
-			t.print(fmt.Sprintf("[twitter] found a duplicate (same original text) from database id:%d, text:%s\n", v.Id, v.Text))
+		original, err := getOriginalText(v.Text)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		if _, ok := addedByText[original]; ok {
+			print(t, fmt.Sprintf("[twitter] found a duplicate (same original text) from database id:%d, text:%s\n", v.Id, v.Text))
 			continue
 		}
 		addedByID[v.Id] = struct{}{}
-		addedByText[text] = struct{}{}
+		addedByText[original] = struct{}{}
 		diff = append(diff, v)
 	}
 	return diff
@@ -592,12 +619,15 @@ func (t *TwitterBot) removeDuplicates(current []anaconda.Tweet) []anaconda.Tweet
 	temp := map[string]struct{}{}
 	stripped := []anaconda.Tweet{}
 	for _, tweet := range current {
-		text := t.getOriginalText(&tweet)
-		if _, ok := temp[text]; !ok {
-			temp[text] = struct{}{}
+		original, err := getOriginalText(tweet.Text)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		if _, ok := temp[original]; !ok {
+			temp[original] = struct{}{}
 			stripped = append(stripped, tweet)
 		} else {
-			t.print(fmt.Sprintf("[twitter] found a duplicate (id:%d), text:%s\n", tweet.Id, tweet.Text))
+			print(t, fmt.Sprintf("[twitter] found a duplicate (id:%d), text:%s\n", tweet.Id, tweet.Text))
 		}
 	}
 	return stripped
@@ -610,12 +640,13 @@ func (t *TwitterBot) removeBanned(current []anaconda.Tweet, bannedQueries []stri
 		for _, bannedQuery := range bannedQueries {
 			if strings.Contains(tweet.Text, bannedQuery) || strings.Contains(tweet.User.Name, bannedQuery) {
 				banned = true
+				break
 			}
 		}
 		if !banned {
 			allowed = append(allowed, tweet)
 		} else {
-			t.print(fmt.Sprintf("[twitter] removing banned tweet (id:%d), text:%s\n", tweet.Id, tweet.Text))
+			print(t, fmt.Sprintf("[twitter] removing banned tweet (id:%d), text:%s\n", tweet.Id, tweet.Text))
 		}
 	}
 	return allowed
@@ -628,7 +659,7 @@ func (t *TwitterBot) like(tweet *anaconda.Tweet) {
 	if tweet.FavoriteCount > t.likePolicy.threshold {
 		_, err := t.twitterClient.Favorite(tweet.Id)
 		if err != nil {
-			t.print(fmt.Sprintf("[twitter] failed to like tweet (id:%d), error: %v\n", tweet.Id, err))
+			print(t, fmt.Sprintf("[twitter] failed to like tweet (id:%d), error: %v\n", tweet.Id, err))
 			return
 		}
 		log.Printf("[twitter] liked tweet (id:%d)\n", tweet.Id)
@@ -638,8 +669,8 @@ func (t *TwitterBot) like(tweet *anaconda.Tweet) {
 	}
 }
 
-func (t *TwitterBot) print(text string) {
-	if t.debug {
+func print(t *TwitterBot, text string) {
+	if t != nil && t.debug {
 		log.Println(text)
 	}
 }
@@ -679,7 +710,7 @@ func (t *TwitterBot) unfollowUser(user *anaconda.User) {
 	unfollowed, err := t.twitterClient.UnfollowUserId(user.Id)
 	if err != nil {
 		checkBotRestriction(err)
-		t.print(fmt.Sprintf("[twitter] failed to unfollow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
+		print(t, fmt.Sprintf("[twitter] failed to unfollow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
 	}
 	log.Printf("[twitter] unfollowing user (id:%d, name:%s)\n", unfollowed.Id, unfollowed.Name)
 }
@@ -700,7 +731,7 @@ func (t *TwitterBot) followUser(user *anaconda.User) {
 	followed, err := t.twitterClient.FollowUserId(user.Id, nil)
 	if err != nil && !checkUnableToFollowAtThisTime(err) {
 		checkBotRestriction(err)
-		t.print(fmt.Sprintf("[twitter] failed to follow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
+		print(t, fmt.Sprintf("[twitter] failed to follow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
 	}
 	log.Printf("[twitter] following user (id:%d, name:%s)\n", followed.Id, followed.Name)
 }
@@ -714,7 +745,7 @@ func (t *TwitterBot) retweet(current []anaconda.Tweet) (rt anaconda.Tweet, err e
 		}
 		retweet, err := t.twitterClient.Retweet(tweet.Id, false)
 		if err != nil {
-			t.print(fmt.Sprintf("[twitter] failed to retweet tweet (id:%d), error: %v\n", tweet.Id, err))
+			print(t, fmt.Sprintf("[twitter] failed to retweet tweet (id:%d), error: %v\n", tweet.Id, err))
 			t.followUser(&tweet.User)
 			continue
 		}
@@ -936,7 +967,7 @@ func (t *TwitterBot) followAll(ids []int64, sleepPolicy *SleepPolicy) {
 		user, err := t.twitterClient.FollowUserId(id, nil)
 		if err != nil && !checkUnableToFollowAtThisTime(err) {
 			checkBotRestriction(err)
-			t.print(fmt.Sprintf("[twitter] failed to follow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
+			print(t, fmt.Sprintf("[twitter] failed to follow user (id:%d, name:%s), error: %v\n", user.Id, user.Name, err))
 			continue
 		}
 		t.addFriend(id)
