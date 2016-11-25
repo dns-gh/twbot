@@ -204,7 +204,7 @@ func (t *TwitterBot) TweetSliceOnce(fetch func() ([]string, error)) error {
 			log.Println(err.Error())
 			continue
 		}
-		log.Println("tweeting message (id:", tweet.Id, "):", tweet.Text)
+		log.Println("[twitter] tweeting message (id:", tweet.Id, "):", tweet.Text)
 	}
 	return nil
 }
@@ -367,7 +367,7 @@ func (t *TwitterBot) TweetImageOnce(msg, archiveURL, img string) error {
 	if err != nil {
 		return err
 	}
-	print(t, fmt.Sprintf("tweeting message and image (id: %d): %s\n", tweet.Id, tweet.Text))
+	print(t, fmt.Sprintf("[twitter] tweeting message and image (id: %d): %s\n", tweet.Id, tweet.Text))
 	return nil
 }
 

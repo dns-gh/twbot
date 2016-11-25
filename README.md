@@ -7,6 +7,7 @@
 
 Twitter Bot providing an asynchronous API to:
 - Make simple tweets
+- Make tweets with an image
 - Retweet messages with a user defined pattern
 - Auto like tweets/retweets with a user-defined pattern
 - Auto follow the followers of a user
