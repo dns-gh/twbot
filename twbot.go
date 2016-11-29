@@ -122,6 +122,12 @@ func MakeTwitterBot(followersPath, friendsPath, tweetsPath string, debug bool) *
 	if len(errorList) > 0 {
 		log.Fatalln(fmt.Sprintf("errors:\n%s", strings.Join(errorList, "\n")))
 	}
+	return MakeTwitterBotWithCredentials(followersPath, friendsPath, tweetsPath, consumerKey, consumerSecret, accessToken, accessSecret, debug)
+}
+
+// MakeTwitterBotWithCredentials creates a twitter bot.
+// Same as MakeTwitterBot but the twitter keys are given as input.
+func MakeTwitterBotWithCredentials(followersPath, friendsPath, tweetsPath, consumerKey, consumerSecret, accessToken, accessSecret string, debug bool) *TwitterBot {
 	anaconda.SetConsumerKey(consumerKey)
 	anaconda.SetConsumerSecret(consumerSecret)
 	bot := &TwitterBot{
