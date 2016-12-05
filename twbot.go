@@ -19,7 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ChimeraCoder/anaconda"
+	// waiting for https://github.com/ChimeraCoder/anaconda/pull/166 to be merged
+	"github.com/dns-gh/anaconda"
 	"github.com/dns-gh/freeze"
 	"github.com/dns-gh/tojson"
 )
@@ -528,6 +529,25 @@ func (t *TwitterBot) AutoFollowFollowersAsync(query string, maxPage int, sleepPo
 		defer t.quit.Done()
 		t.AutoFollowFollowers(query, maxPage, sleepPolicyCopy)
 	}()
+}
+
+// UpdateProfileBanner updates the profile banner of the authenticated user
+// with the given encoded image data. Other parameters are optionals and usable
+// coinjointly only if they all are strictly positive.
+// For more details, see: https://dev.twitter.com/rest/reference/post/account/update_profile_banner
+func (t *TwitterBot) UpdateProfileBanner(img string, width, height, offsetLeft, offsetTop int) error {
+	buf := bytes.NewBufferString(img)
+	base64String := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	v := url.Values{}
+	if width > 0 && height > 0 && offsetTop > 0 && offsetLeft > 0 {
+		v.Set("width", strconv.Itoa(width))
+		v.Set("height", strconv.Itoa(height))
+		v.Set("offset_left", strconv.Itoa(offsetLeft))
+		v.Set("offset_top", strconv.Itoa(offsetTop))
+	}
+
+	return t.twitterClient.AccountUpdateProfileBanner(base64String, v)
 }
 
 func getEnv(errorList []string, key string) string {
