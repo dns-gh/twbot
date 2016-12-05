@@ -531,6 +531,18 @@ func (t *TwitterBot) AutoFollowFollowersAsync(query string, maxPage int, sleepPo
 	}()
 }
 
+func (t *TwitterBot) checkAPIError(err error) error {
+	if err == nil {
+		return err
+	}
+	apiErr := err.(*anaconda.ApiError)
+	if apiErr != nil && apiErr.StatusCode >= 200 && apiErr.StatusCode < 300 {
+		print(t, err.Error())
+		return nil
+	}
+	return err
+}
+
 // UpdateProfileBanner updates the profile banner of the authenticated user
 // with the given encoded image data. Other parameters are optionals and usable
 // coinjointly only if they all are strictly positive.
@@ -547,7 +559,7 @@ func (t *TwitterBot) UpdateProfileBanner(img string, width, height, offsetLeft, 
 		v.Set("offset_top", strconv.Itoa(offsetTop))
 	}
 
-	return t.twitterClient.AccountUpdateProfileBanner(base64String, v)
+	return t.checkAPIError(t.twitterClient.AccountUpdateProfileBanner(base64String, v))
 }
 
 func getEnv(errorList []string, key string) string {
