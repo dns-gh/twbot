@@ -38,6 +38,7 @@ const (
 	oneDayInNano                    int64 = 86400000000000
 	timeSleepBetweenFollowUnFollow        = 300 * time.Second // seconds
 	maxRandTimeSleepBetweenRequests       = 120               // seconds
+	tcoLinksMaxLength                     = 24
 )
 
 type twitterUser struct {
@@ -326,27 +327,27 @@ func (t *TwitterBot) TweetPeriodicallyAsync(fetch func() (string, error), freq t
 // - url
 // - msg
 // - truncated msg
-func truncate(msg, archiveURL string) string {
+func truncate(msg, archiveURL string, urlMaxLength int) string {
 	bytes := bytes.NewBufferString(msg).Bytes()
 	sep := "... "
 	emptySep := " "
-	if len(archiveURL) == 0 {
+	if urlMaxLength == 0 {
 		if len(bytes) > tweetTextMaxSize {
 			bytes = bytes[0 : tweetTextMaxSize-len(sep)]
 			return string(bytes) + sep[0:len(sep)-1]
 		}
 		return string(bytes)
 	}
-	if len(bytes)+len(emptySep)+len(archiveURL) <= tweetTextMaxSize {
+	if len(bytes)+len(emptySep)+urlMaxLength <= tweetTextMaxSize {
 		return string(bytes) + emptySep + archiveURL
 	}
-	left := len(bytes) + len(sep) + len(archiveURL) - tweetTextMaxSize
+	left := len(bytes) + len(sep) + urlMaxLength - tweetTextMaxSize
 	// keep at least 'tweetTruncatedTextMin' characters for the message
 	if len(bytes)-left >= tweetTruncatedTextMin {
 		bytes = bytes[0 : len(bytes)-left]
 		return string(bytes) + sep + archiveURL
 	}
-	if len(archiveURL) <= tweetTextMaxSize {
+	if urlMaxLength <= tweetTextMaxSize {
 		return archiveURL
 	}
 	if len(bytes) <= tweetTextMaxSize {
@@ -354,6 +355,20 @@ func truncate(msg, archiveURL string) string {
 	}
 	bytes = bytes[0 : tweetTextMaxSize-1]
 	return string(bytes)
+}
+
+func (t *TwitterBot) tryPostTweet(msg, archiveURL string, v url.Values) (tweet anaconda.Tweet, err error) {
+	tweet, err = t.twitterClient.PostTweet(truncate(msg, archiveURL, tcoLinksMaxLength), v)
+	if err != nil {
+		if t.isStatusOver140CharactersError(err) {
+			tweet, err = t.twitterClient.PostTweet(truncate(msg, archiveURL, len(archiveURL)), v)
+			if err != nil {
+				return tweet, err
+			}
+		}
+		return tweet, err
+	}
+	return tweet, nil
 }
 
 // TweetImageOnce tweets the given 'msg', 'archiveURL' and img' data provided as strings.
@@ -367,10 +382,9 @@ func (t *TwitterBot) TweetImageOnce(msg, archiveURL, img string) error {
 		return err
 	}
 
-	tw := url.Values{}
-	tw.Set("media_ids", fmt.Sprintf("%v", media.MediaID))
-	tosend := truncate(msg, archiveURL)
-	tweet, err := t.twitterClient.PostTweet(tosend, tw)
+	v := url.Values{}
+	v.Set("media_ids", fmt.Sprintf("%v", media.MediaID))
+	tweet, err := t.tryPostTweet(msg, archiveURL, v)
 	if err != nil {
 		return err
 	}
@@ -541,6 +555,20 @@ func (t *TwitterBot) checkAPIError(err error) error {
 		return nil
 	}
 	return err
+}
+
+func (t *TwitterBot) isStatusOver140CharactersError(err error) bool {
+	if err == nil {
+		return false
+	}
+	apiErr := err.(*anaconda.ApiError)
+	if apiErr != nil &&
+		len(apiErr.Decoded.Errors) > 0 &&
+		apiErr.Decoded.Errors[0].Code == anaconda.TwitterErrorStatusOver140Characters {
+		print(t, err.Error())
+		return true
+	}
+	return false
 }
 
 // UpdateProfileBanner updates the profile banner of the authenticated user
